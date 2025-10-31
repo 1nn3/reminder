@@ -1,0 +1,34 @@
+Source: reminder
+Section: utils
+Priority: optional
+Maintainer: user <user@host>
+Build-Depends: debhelper (>= 9.0.0)
+Build-Depends-Indep: libfile-sharedir-install-perl
+Standards-Version: 4.1.4
+
+Package: reminder
+Architecture: all
+Depends: libconfig-any-perl,
+         libconfig-tiny-perl,
+         libdata-ical-perl,
+         libdatetime-event-ical-perl,
+         libdatetime-format-ical-perl,
+         libdatetime-perl,
+         libfile-homedir-perl,
+         libfile-sharedir-perl,
+         libical-parser-perl,
+         liblocale-codes-perl,
+         liblog-log4perl-perl,
+         libmime-charset-perl,
+         libmime-lite-perl,
+         libmime-types-perl,
+         libpath-tiny-perl,
+         libproc-pid-file-perl,
+         moreutils,
+         ${misc:Depends},
+         ${perl:Depends},
+         ${shlibs:Depends}
+Recommends: default-mta | mail-transport-agent,
+            mail-reader | icedove | thunderbird
+Description: Reminder/Calendar aka. Ritual
+ Reminder is a very simpel calendar using iCalendar standard

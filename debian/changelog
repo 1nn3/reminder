@@ -1,0 +1,5 @@
+reminder (1) UNRELEASED; urgency=low
+
+  * Initial release (Closes: #nnnn)  <nnnn is the bug number of your ITP>
+
+ -- user <user@host>  Mon, 15 Sep 2025 16:17:31 +0200

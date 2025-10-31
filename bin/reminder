@@ -1,0 +1,253 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use feature 'say';
+
+#use locale;
+use utf8;
+use open ':std',
+    ':encoding(UTF-8)';    # Optional, also affects STDIN/STDOUT/STDERR
+binmode( STDIN,  ":encoding(UTF-8)" );    # binmode(STDIN, ":utf8");
+binmode( STDOUT, ":encoding(UTF-8)" );    # binmode(STDOUT, ":utf8");
+binmode( STDERR, ":encoding(UTF-8)" );    # binmode(STDERR, ":utf8");
+
+use App::Reminder;
+
+use Data::ICal;
+use DateTime;
+use DateTime::Format::Strptime;
+my $formatter
+    = DateTime::Format::Strptime->new( pattern => '%Y-%m-%d %H:%M:%S', );
+use DateTime::Event::ICal;
+use File::Spec;
+use File::HomeDir;
+use Text::Wrap;
+$Text::Wrap::columns = 40;    # maximale Zeilenlänge
+
+binmode STDOUT, ':encoding(UTF-8)';    # Ensure output is UTF-8
+
+our %opts;                             # command-line options
+                                       # read the command-line-options
+getopts( "t:f:S:vq", \%opts )
+    || die "Error on processing of command-line-options";
+
+MIME::Lite->quiet( $opts{v} );
+MIME::Lite->send(
+    'sendmail',
+    $opts{S} || "/usr/lib/sendmail -t -oi -oem",
+    Debug => $opts{v}
+);
+
+# ===============================
+# Hauptfunktion zum Verarbeiten einer iCal-Datei
+# ===============================
+sub a {
+    my ($ical_file) = @_;
+
+    my $ical = Data::ICal->new( filename => $ical_file );
+
+    # Hole aktuelle Uhrzeit
+    my $now = DateTime->now();
+    $now->set_time_zone('local');
+
+    #say $formatter->format_datetime($now);
+    my $current_hour   = $now->hour;
+    my $current_minute = $now->minute;
+
+# Wähle einen breiten Zeitraum, um alle Events~/Projects/ritual/ritual.pl mit dieser Uhrzeit zu finden
+# my $start_period = DateTime->now(time_zone => 'Europe/Berlin');
+    my $start_period = $now->clone->subtract( minutes => 1 );
+    my $end_period   = $start_period->clone->add( minutes => 2 );
+
+#say $formatter->format_datetime($start_period)," -> ", $formatter->format_datetime($end_period);
+
+    foreach my $component ( @{ $ical->entries } ) {
+        next unless $component->ical_entry_type eq 'VEVENT';
+
+        my $summary     = get_prop( $component, 'SUMMARY' ) || '';
+        my $dtstart_str = get_prop( $component, 'DTSTART' );
+        my $dtend_str   = get_prop( $component, 'DTEND' )    || $dtstart_str;
+        my $location    = get_prop( $component, 'LOCATION' ) || '';
+        my $description = get_prop( $component, 'DESCRIPTION' ) || '';
+        my $rrule_str   = get_prop( $component, 'RRULE' );
+
+        my $dtstart  = parse_ical_datetime($dtstart_str);
+        my $dtend    = parse_ical_datetime($dtend_str);
+        my $duration = $dtend->subtract_datetime($dtstart);
+
+        if ($rrule_str) {
+            my %rrule;
+            for my $pair ( split /;/, $rrule_str ) {
+                my ( $k, $v ) = split /=/, $pair;
+                $k         = lc($k);
+                $v         = lc($v);
+                $rrule{$k} = $v;
+            }
+
+            # FREQ muss vorhanden sein
+            my $freq = $rrule{'freq'} or die "❌ RRULE ohne FREQ";
+
+            # Optionale Parameter vorbereiten
+            my %params = ( dtstart => $dtstart, freq => $freq );
+
+            # BYDAY wird oft als Liste angegeben, z.B. "mo,tu,we"
+            if ( $rrule{'byday'} ) {
+                my @days = split /,/, $rrule{'byday'};
+                $params{byday} = \@days;
+            }
+
+            # BYMONTHDAY z.B. "1,15"
+            if ( $rrule{'bymonthday'} ) {
+                my @monthdays = split /,/, $rrule{'bymonthday'};
+                $params{bymonthday} = \@monthdays;
+            }
+
+            # BYMONTH z.B. "1,3,12"
+            if ( $rrule{'bymonth'} ) {
+                my @months = split /,/, $rrule{'bymonth'};
+                $params{bymonth} = \@months;
+            }
+
+            # COUNT z.B. "5" – begrenzt die Anzahl der Wiederholungen
+            if ( $rrule{'count'} ) {
+                $params{count} = $rrule{'count'};
+            }
+
+            # UNTIL z.B. "20250930T120000Z"
+            if ( $rrule{'until'} ) {
+                my $until_dt = parse_ical_datetime( $rrule{'until'} );
+                $params{until} = $until_dt;
+            }
+
+            my $recurrence = DateTime::Event::ICal->recur(%params);
+
+            my @occurrences = $recurrence->as_list(
+                start => $start_period,
+                end   => $end_period,
+            );
+
+            foreach my $occ (@occurrences) {
+
+                #say "⏰ Stunde: ", $occ->hour,   "\t=>\t", $current_hour;
+                #say "⏰ Minute: ", $occ->minute, "\t=>\t", $current_minute;
+                if (   $occ->hour == $current_hour
+                    && $occ->minute == $current_minute )
+                {
+                    my $occ_end = $occ->clone->add_duration($duration);
+                    send_event_email( $summary, $occ, $occ_end, $location,
+                        $description );
+                }
+            }
+        }
+        else {
+            # Einmaliger Termin
+            if (   $dtstart->ymd eq $now->ymd
+                && $dtstart->hour == $current_hour
+                && $dtstart->minute == $current_minute )
+            {
+                send_event_email( $summary, $dtstart, $dtend, $location,
+                    $description );
+            }
+        }
+    }
+}
+
+sub _get_cfg_val {
+    my ( $val, $default ) = @_;
+    return $App::Reminder::cfg->{_}{$val}
+        || App::Reminder::get_cfg_val( $val, $default );
+}
+
+# ===============================
+# E-Mail senden
+# ===============================
+sub send_event_email {
+    my ( $summary, $start_dt, $end_dt, $location, $description ) = @_;
+    my $body = sprintf(
+        "Hallo,
+
+hier ist eine Erinnerung an das Event:
+
+%s
+
+Viele Grüße,
+Dein Reminder
+", $description || $summary
+    );
+
+    my $from = $opts{f} || _get_cfg_val( "from", $ENV{EMAIL} || $ENV{USER} );
+    my $to   = $opts{t} || _get_cfg_val( "to",   $ENV{EMAIL} || $ENV{USER} );
+
+    # define mail body
+    my $mail = MIME::Lite->new(
+        "From"    => $from,
+        "To"      => $to,
+        "Subject" => "⏰ Erinnerung: $summary",
+        "Type"    => "multipart/mixed",
+    );
+    my $part = MIME::Lite->new(
+        "Type"        => "text/plain; charset=utf-8",
+        "Data"        => $body,
+        "Encoding"    => "base64",
+        "Disposition" => "inline",
+    );
+    $mail->attach($part);
+
+    eval {
+        $mail->replace( "X-Mailer", _get_cfg_val("x_mailer") );
+        $mail->send() || warn "send mail failed: $@, $!";
+        return $mail->last_send_successful();
+    };
+    if ($@) {
+        $App::Reminder::logger->warn(
+            sprintf( "❌ Fehler beim Senden der E-Mail: %s", $@ ) );
+    }
+}
+
+# ===============================
+# Datumsstring aus iCal in DateTime umwandeln
+# ===============================
+sub parse_ical_datetime {
+    my ($dt_str) = @_;
+
+    if ( $dt_str =~ /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z?$/ ) {
+        return DateTime->new(
+            year   => $1,
+            month  => $2,
+            day    => $3,
+            hour   => $4,
+            minute => $5,
+            second => $6,
+        );
+    }
+    elsif ( $dt_str =~ /^(\d{4})(\d{2})(\d{2})$/ ) {
+        return DateTime->new(
+            year  => $1,
+            month => $2,
+            day   => $3,
+        );
+    }
+
+    $App::Reminder::logger->error(
+        sprintf( "❌ Unbekanntes Datumformat: %s", $dt_str ) );
+    die;
+}
+
+# ===============================
+# Property-Wert aus VEVENT holen
+# ===============================
+sub get_prop {
+    my ( $component, $prop ) = @_;
+    my $entry = $component->property($prop);
+    return $entry ? $entry->[0]->value : '';
+}
+
+$App::Reminder::cfg = App::Reminder::load_config($App::Reminder::CONFIGFILE);
+my @calendar_files
+    = App::Reminder::list_calendar_d($App::Reminder::CALENDAR_D);
+for my $calendar_file (@calendar_files) {
+    $App::Reminder::logger->info(
+        sprintf( "⚙️ Bearbeite: %s", $calendar_file ) );
+    a($calendar_file);
+}

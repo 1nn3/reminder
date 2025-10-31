@@ -1,0 +1,64 @@
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+reminder - Calendar unsing the iCalendar standard
+
+=head1 SYNOPSIS
+
+B<reminder> [-t to] [-S alt. sendmail command]
+
+=head1 OPTIONS
+
+=head2 General options
+
+=over
+
+=item --version
+
+=item --help
+
+=item -q
+
+Quiet: Inhibit the usual output.
+
+=item -v
+
+Verbose: Print more information about progress.
+
+=item -c <path/to/directory>
+
+Configuration directory.
+
+Not implemented yet.
+
+=back
+
+=head1 FILES
+
+=over
+
+=item config.ini
+
+A INI style configuration file. 
+
+=item calendar.d/*.ics
+
+The iCal Calendar files.
+
+=item .no-reminder
+
+When this file exists in the current working directory L<reminder(1p)> will not run.
+
+Not implemented yet.
+
+=back
+
+=head1 SEE ALSO
+
+L<cron(8)>, L<calendar(1)>, L<at(1)>
+
+=cut
+
